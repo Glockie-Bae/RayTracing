@@ -16,15 +16,12 @@ uint32_t Renderer::GetHeight()
 
 
 
-glm::vec3 Renderer::RayColor(Ray ray, glm::vec3 light, Sphere sphere)
+glm::vec3 Renderer::RayColor(const HitRecord& record)
 {
-	glm::vec3 origin = ray.m_Origin - sphere.m_Center;
-	glm::vec3 hitPoint = origin + ray.m_Direction * ray.m_T;
-	glm::vec3 normal = glm::normalize(hitPoint);
-
 	glm::vec3 lightDir = glm::normalize(m_LightDir);
-	float lightIntensity = glm::max(glm::dot(normal, -lightDir), 0.0f);
+	float lightIntensity = glm::max(glm::dot(record.normal, -lightDir), 0.0f);
 
+	Sphere sphere = m_ActiveWorld.world[record.object_id];
 	glm::vec3 sphereColor = sphere.m_Albedo;
 	sphereColor *= lightIntensity;
 
@@ -32,68 +29,104 @@ glm::vec3 Renderer::RayColor(Ray ray, glm::vec3 light, Sphere sphere)
 }
 
 
-glm::vec4 Renderer::TraceRay(const World& world, Ray ray)
+HitRecord Renderer::TraceRay(const World& world, Ray ray)
 {
 	// camrea position  -> ray.Origin
 	// object position  -> ray.Direction
 
 
-	if (world.world.size() == 0)
-		return glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-	
-	const Sphere* closestSphere = nullptr;
-	ray.m_T = std::numeric_limits<float>::max();
-	for (const Sphere& sphere : world.world)
+
+	int closestSphereID = -1;
+    float closestT = std::numeric_limits<float>::max();
+
+	for (int i = 0;i < m_ActiveWorld.Size(); i++)
 	{
-		glm::vec3 origin = ray.m_Origin - sphere.GetCenter();
+		const Sphere& sphere = m_ActiveWorld.world[i];
 
-		float a = glm::dot(ray.m_Direction, ray.m_Direction);
-		float b = 2.0f * (glm::dot(origin, ray.m_Direction));
-		float c = glm::dot(origin, origin) - (sphere.m_Radius * sphere.m_Radius);
+		HitRecord record;
+		float tempT = sphere.Hit(ray, record);
 
-		float discriminant = b * b - 4.0f * a * c;
-		if (discriminant < 0.0f)
-			continue;
-
-		float tempT = (-b - sqrt(discriminant)) / (2.0f * a);
-		if (tempT < ray.m_T) {
-			closestSphere = &sphere;
-			ray.m_T = tempT;
+		if (tempT > 0.0f && tempT < closestT) {
+			closestSphereID = i;
+			closestT = tempT;
 		}
 	}
 
-	if (closestSphere == nullptr)
-		return glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+	if (closestSphereID < 0)
+		return Miss(ray);
 
 
 
+	return ClosestHit(ray, closestSphereID, closestT);
 
-	return glm::vec4(RayColor(ray, m_LightDir, *closestSphere), 1.0f);
+}
 
+HitRecord Renderer::ClosestHit(const Ray& ray, int closestSphereID, float closestT)
+{
+	HitRecord record;
+	Sphere sphere = m_ActiveWorld.world[closestSphereID];
+
+	record.t = closestT;
+	record.hit_p = ray.m_Origin + closestT * ray.m_Direction;
+	record.normal = glm::normalize(record.hit_p - sphere.GetCenter());
+	record.object_id = closestSphereID;
+
+	return record;
+
+}
+
+HitRecord Renderer::Miss(const Ray& ray)
+{
+	HitRecord record;
+	record.t = -1;
+	return record;
 }
 
 void Renderer::Render(const World& world, const Camera& camera)
 {
-	Ray ray;
-	ray.m_Origin = camera.GetPosition();
+	m_ActiveWorld = world;
 
 	float aspectRatio = (float)m_FinalImage->GetWidth() / (float)m_FinalImage->GetHeight();
 	for (uint32_t y = 0; y < m_FinalImage->GetHeight(); y++) {
 		for (uint32_t x = 0; x < m_FinalImage->GetWidth(); x++) {
-			glm::vec2 coord( (float)x / (float)m_FinalImage->GetWidth(), (float)y / (float)m_FinalImage->GetHeight());
-
-			coord = coord * 2.0f - 1.0f;
-			coord.x *= aspectRatio;
-
-			ray.m_Direction = camera.GetRayDirections()[x + y * m_FinalImage->GetWidth()];
-
-			glm::vec4 color = TraceRay(world, ray);
+;
+			glm::vec4 color = PerPixel(camera, x, y);
 			color = glm::clamp(color, glm::vec4(0.0f), glm::vec4(1.0f));
 			m_ImageData[x + y * m_FinalImage->GetWidth()] = ConvertToRGBA(color);
 		}
 	}
 	m_FinalImage->SetData(m_ImageData);
 }
+
+glm::vec4 Renderer::PerPixel(const Camera& camera, uint32_t x, uint32_t y)
+{
+	Ray ray;
+	ray.m_Origin = camera.GetPosition();
+	ray.m_Direction = camera.GetRayDirections()[x + y * m_FinalImage->GetWidth()];
+
+	glm::vec3 finalColor(0.0f);
+	float multiplier = 1.0f;
+	int bounces = 2;
+	for (int i = 0; i < bounces; i++) {
+		HitRecord record = TraceRay(m_ActiveWorld, ray);
+		if (record.t < 0) {
+			glm::vec3 skyColor = glm::vec3(0.0f, 0.0f, 0.0f);
+			finalColor += skyColor * multiplier;
+			break;
+		}
+
+		finalColor += RayColor(record) * multiplier;
+		multiplier *= 0.7f;
+
+		ray.m_Origin = record.hit_p + 0.001f * record.normal;
+		ray.m_Direction = glm::reflect(ray.m_Direction, record.normal);
+	}
+
+
+	return glm::vec4(finalColor,1.0f);
+}
+
+
 
 uint32_t Renderer::ConvertToRGBA(const glm::vec4& color)
 {
@@ -115,12 +148,12 @@ void Renderer::OnResize(uint32_t width, uint32_t height)
 			return;
 
 		m_FinalImage->Resize(width, height);
-		
+
 	}
 	else
 	{
 		m_FinalImage = std::make_shared<Walnut::Image>(width, height, Walnut::ImageFormat::RGBA);
-		
+
 	}
 
 	delete[] m_ImageData;
