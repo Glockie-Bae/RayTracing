@@ -9,13 +9,13 @@ struct HitRecord {
 	glm::vec3 hit_p;
 	glm::vec3 normal;
 
-	bool front_face;
+	int object_id;
 
 };
 
 class HitTable {
 public:
-	virtual bool Hit(const Ray& ray, float t_min, float t_max, HitRecord& record, glm::vec3 light) const = 0;
+	virtual float Hit(const Ray& ray, const HitRecord& record) const =0;
 };
 
 class Sphere : public HitTable {
@@ -27,7 +27,7 @@ public:
 	}
 	Sphere(const glm::vec3& center, float radius, const glm::vec3& albedo)
 		: m_Center(center), m_Radius(radius), m_Albedo(albedo){};
-	bool Hit(const Ray& ray,float t_min, float t_max, HitRecord& record, glm::vec3 light) const;
+	float Hit(const Ray& ray, const HitRecord& record) const;
 
 	glm::vec3 GetAlbedo() const { return m_Albedo; }
 	glm::vec3 GetCenter() const { return m_Center; }
